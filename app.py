@@ -130,7 +130,7 @@ def call_gemini(prompt):
 
             time.sleep(5 * (2 ** attempt))
 
-    return "Gemini is temporarily unavailable. Please try again."
+    return f"Gemini error : {error_text}"
 
 
 # ==========================================
