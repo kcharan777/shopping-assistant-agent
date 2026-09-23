@@ -4,6 +4,7 @@ import re
 import time
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -116,6 +117,7 @@ def call_gemini(prompt):
     for attempt in range(3):
 
         try:
+
             response = llm.invoke(prompt)
 
             if response.content:
@@ -126,11 +128,11 @@ def call_gemini(prompt):
             error_text = str(e)
 
             if "503" not in error_text and "UNAVAILABLE" not in error_text:
-                break
+                return f"Gemini error: {error_text}"
 
             time.sleep(5 * (2 ** attempt))
 
-    return f"Gemini error : {error_text}"
+    return "Gemini is temporarily unavailable. Please try again."
 
 
 # ==========================================
@@ -141,17 +143,22 @@ def shopping_assistant(user_request):
 
     request = user_request.lower()
 
+
     # Detect category
     if "laptop" in request:
+
         category = "laptop"
 
     elif "phone" in request or "smartphone" in request:
+
         category = "phone"
 
     elif "headphone" in request:
+
         category = "headphones"
 
     else:
+
         category = None
 
 
@@ -162,8 +169,11 @@ def shopping_assistant(user_request):
     )
 
     if budget_match:
+
         budget = int(budget_match.group(1))
+
     else:
+
         budget = None
 
 
@@ -183,6 +193,7 @@ def shopping_assistant(user_request):
 
     # If nothing matches
     if not selected:
+
         selected = PRODUCTS
 
 
@@ -205,9 +216,7 @@ USER REQUEST:
 AVAILABLE PRODUCTS:
 {product_text}
 
-Give the answer in this simple format.
-
-For laptops use:
+Give the answer in this exact simple format:
 
 Laptop options under ₹60,000
 
@@ -218,26 +227,6 @@ Important features
 Important features
 
 💻 Product Name — ₹Price
-Important features
-
-Best match: Product Name
-Budget option: Product Name
-
-For phones use:
-
-Phone options under the user's budget
-
-📱 Product Name — ₹Price
-Important features
-
-Best match: Product Name
-Budget option: Product Name
-
-For headphones use:
-
-Headphone options under the user's budget
-
-🎧 Product Name — ₹Price
 Important features
 
 Best match: Product Name
@@ -255,8 +244,9 @@ RULES:
 8. Mention important features matching the user's request.
 9. Use ₹ for prices.
 10. Give only the final shopping answer.
-11. Do not use Markdown tables.
+11. Do not use tables.
 12. Do not add unnecessary headings.
+13. Format prices with commas, for example ₹54,990.
 """
 
     return call_gemini(prompt)
@@ -293,6 +283,18 @@ app = FastAPI(
     title="Shopping Assistant Agent",
     version="1.0"
 )
+
+
+# ==========================================
+# CLEAN HOME PAGE
+# ==========================================
+
+@app.get("/")
+def home():
+
+    return FileResponse(
+        "static/index.html"
+    )
 
 
 # ==========================================
