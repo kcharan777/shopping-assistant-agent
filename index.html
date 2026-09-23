@@ -23,31 +23,74 @@
 
 async function askAssistant() {
 
-    const question = document.getElementById("question").value;
-    const answerBox = document.getElementById("answer");
+    const question =
+        document.getElementById("question").value;
+
+    const answerBox =
+        document.getElementById("answer");
 
     answerBox.textContent = "Thinking...";
 
-    const response = await fetch("/agent/invoke", {
+    try {
 
-        method: "POST",
+        const response = await fetch("/agent/invoke", {
 
-        headers: {
-            "Content-Type": "application/json"
-        },
+            method: "POST",
 
-        body: JSON.stringify({
-            input: {
-                input: question
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+                input: {
+                    input: question
+                }
+            })
+
+        });
+
+        const data = await response.json();
+
+        let answer = data.output;
+
+        if (Array.isArray(answer)) {
+
+            const textBlock =
+                answer.find(item => item.type === "text");
+
+            answer =
+                textBlock ? textBlock.text : "";
+
+        }
+
+        else if (
+            answer &&
+            typeof answer === "object"
+        ) {
+
+            if (typeof answer.text === "string") {
+                answer = answer.text;
             }
-        })
 
-    });
+            else if (typeof answer.content === "string") {
+                answer = answer.content;
+            }
 
-    const data = await response.json();
+            else {
+                answer = JSON.stringify(answer);
+            }
+        }
 
-    answerBox.textContent =
-        data.output;
+        answerBox.textContent = answer;
+
+    }
+
+    catch (error) {
+
+        answerBox.textContent =
+            "Error: " + error.message;
+
+    }
 
 }
 
