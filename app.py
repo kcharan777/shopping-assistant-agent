@@ -1,16 +1,18 @@
 import os
 import json
-from typing import Any
+import re
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables import RunnableLambda
+from langserve import add_routes
 
 
-# -------------------------------------------------
-# PRODUCT DATA
-# -------------------------------------------------
+# --------------------------------------------------
+# PRODUCT DATABASE
+# --------------------------------------------------
 
 PRODUCTS = [
     {
@@ -37,6 +39,7 @@ PRODUCTS = [
         "rating": 4.2,
         "features": "16GB RAM, 512GB SSD, 15.6 inch display"
     },
+
     {
         "name": "Samsung Galaxy A55",
         "category": "phone",
@@ -61,6 +64,7 @@ PRODUCTS = [
         "rating": 4.3,
         "features": "5G, AMOLED, good camera, long battery"
     },
+
     {
         "name": "Sony WH-1000XM5",
         "category": "headphones",
@@ -80,9 +84,9 @@ PRODUCTS = [
 ]
 
 
-# -------------------------------------------------
-# MODEL
-# -------------------------------------------------
+# --------------------------------------------------
+# GEMINI MODEL
+# --------------------------------------------------
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.6-flash",
@@ -91,9 +95,9 @@ llm = ChatGoogleGenerativeAI(
 )
 
 
-# -------------------------------------------------
-# PRODUCT SEARCH FUNCTIONS
-# -------------------------------------------------
+# --------------------------------------------------
+# TOOLS / FUNCTIONS
+# --------------------------------------------------
 
 def search_products(query: str):
     words = query.lower().split()
@@ -102,125 +106,174 @@ def search_products(query: str):
 
     for product in PRODUCTS:
         text = (
-            product["name"] + " " +
-            product["category"] + " " +
-            product["brand"] + " " +
-            product["features"]
+            product["name"]
+            + " "
+            + product["category"]
+            + " "
+            + product["brand"]
+            + " "
+            + product["features"]
         ).lower()
 
-        if any(word in text for word in words if len(word) > 2):
-            matches.append(product)
-
-    if not matches:
-        matches = PRODUCTS
+        for word in words:
+            if len(word) > 2 and word in text:
+                matches.append(product)
+                break
 
     return matches
 
 
 def filter_by_budget(category: str, max_price: float):
     return [
-        p for p in PRODUCTS
-        if p["category"].lower() == category.lower()
-        and p["price"] <= max_price
+        product
+        for product in PRODUCTS
+        if product["category"].lower() == category.lower()
+        and product["price"] <= max_price
     ]
 
 
 def compare_products(product_names: str):
-    names = [x.strip().lower() for x in product_names.split(",")]
+    names = [
+        name.strip().lower()
+        for name in product_names.split(",")
+    ]
 
-    results = []
-
-    for product in PRODUCTS:
-        if product["name"].lower() in names:
-            results.append(product)
-
-    return results
+    return [
+        product
+        for product in PRODUCTS
+        if product["name"].lower() in names
+    ]
 
 
-# -------------------------------------------------
-# INPUT
-# -------------------------------------------------
+# --------------------------------------------------
+# INPUT / OUTPUT MODELS
+# --------------------------------------------------
 
 class AgentInput(BaseModel):
-    input: str = Field(description="Shopping request")
+    input: str = Field(
+        description="Shopping request"
+    )
 
 
-# -------------------------------------------------
+class AgentOutput(BaseModel):
+    output: str
+
+
+# --------------------------------------------------
 # SHOPPING ASSISTANT
-# -------------------------------------------------
+# --------------------------------------------------
 
 def shopping_assistant(user_request: str):
 
     request = user_request.lower()
 
-    selected = []
-
-    # Detect category
+    # Find category
     if "laptop" in request:
         category = "laptop"
+
     elif "phone" in request or "smartphone" in request:
         category = "phone"
+
     elif "headphone" in request:
         category = "headphones"
+
     else:
         category = None
 
-    # Detect budget
-    import re
 
-    budget_match = re.search(r'₹?\s*(\d{4,6})', request)
+    # Find budget
+    budget_match = re.search(
+        r'₹?\s*(\d{4,6})',
+        request
+    )
 
     if budget_match:
         budget = int(budget_match.group(1))
     else:
         budget = None
 
-    # Filter products
+
+    # Select matching products
+    selected = []
+
     for product in PRODUCTS:
 
-        if category and product["category"] != category:
-            continue
+        if category:
+            if product["category"] != category:
+                continue
 
-        if budget and product["price"] > budget:
-            continue
+        if budget:
+            if product["price"] > budget:
+                continue
 
         selected.append(product)
 
-    # If nothing found
+
+    # If nothing matches, use all products
     if not selected:
         selected = PRODUCTS
 
-    # Prepare product information
-    product_text = json.dumps(selected, indent=2)
 
+    # Convert products to text for Gemini
+    product_text = json.dumps(
+        selected,
+        indent=2
+    )
+
+
+    # Gemini prompt
     prompt = f"""
 You are an AI Shopping Assistant.
 
-User request:
+USER REQUEST:
 {user_request}
 
-Available products:
+AVAILABLE PRODUCTS:
 {product_text}
 
-Give a clear shopping recommendation.
+Your job is to help the user choose a suitable product.
 
-Rules:
-1. Only use the products and information provided above.
-2. Never invent prices or specifications.
-3. Mention the price of suitable products.
-4. Mention important matching features.
-5. If several products match, compare them briefly.
-6. Keep the answer easy to understand.
+RULES:
+1. Use ONLY the products and information provided.
+2. Do not invent products.
+3. Do not invent prices.
+4. Do not invent specifications.
+5. Mention the product name and price.
+6. Mention the important matching features.
+7. If multiple products match, compare them briefly.
+8. Give a clear recommendation based on the user's requirements.
+9. Keep the answer simple and easy to understand.
+10. Do not say that the output is predefined.
 """
 
+
+    # Ask Gemini to generate final answer
     response = llm.invoke(prompt)
 
     return response.content
 
 
-# -------------------------------------------------
-# FASTAPI
-# -------------------------------------------------
+# --------------------------------------------------
+# LANGSERVE FUNCTION
+# --------------------------------------------------
+
+def run_agent(data):
+
+    # Get user's input from LangServe
+    user_input = data["input"]
+
+    # Generate answer
+    answer = shopping_assistant(user_input)
+
+    # Return output
+    return {
+        "output": answer
+    }
+
+
+# --------------------------------------------------
+# FASTAPI APPLICATION
+# --------------------------------------------------
 
 app = FastAPI(
     title="Shopping Assistant Agent",
@@ -228,16 +281,48 @@ app = FastAPI(
 )
 
 
+# --------------------------------------------------
+# HEALTH CHECK
+# --------------------------------------------------
+
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
-
-
-@app.post("/agent")
-def agent_endpoint(data: AgentInput):
-
-    answer = shopping_assistant(data.input)
 
     return {
-        "output": answer
+        "status": "healthy"
     }
+
+
+# --------------------------------------------------
+# LANGSERVE ROUTE
+# --------------------------------------------------
+
+chain = RunnableLambda(run_agent).with_types(
+    input_type=AgentInput,
+    output_type=AgentOutput
+)
+
+add_routes(
+    app,
+    chain,
+    path="/agent"
+)
+
+
+# --------------------------------------------------
+# RUN SERVER
+# --------------------------------------------------
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    port = int(
+        os.environ.get("PORT", 8000)
+    )
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
+    )
