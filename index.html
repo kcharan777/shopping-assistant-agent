@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shopping Assistant</title>
+</head>
+
+<body>
+
+<h2>Shopping Assistant</h2>
+
+<input
+    id="question"
+    type="text"
+    placeholder="Enter your shopping request"
+    style="width:400px;padding:10px;"
+>
+
+<button onclick="askAssistant()">Ask</button>
+
+<pre id="answer"></pre>
+
+<script>
+
+async function askAssistant() {
+
+    const question = document.getElementById("question").value;
+    const answerBox = document.getElementById("answer");
+
+    answerBox.textContent = "Thinking...";
+
+    const response = await fetch("/agent/invoke", {
+
+        method: "POST",
+
+        headers: {
+            "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+            input: {
+                input: question
+            }
+        })
+
+    });
+
+    const data = await response.json();
+
+    answerBox.textContent =
+        data.output;
+
+}
+
+</script>
+
+</body>
+</html>
