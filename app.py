@@ -84,7 +84,7 @@ PRODUCTS = [
 
 
 # ==========================================
-# GEMINI MODELS
+# GEMINI
 # ==========================================
 
 api_key = os.environ["GEMINI_API_KEY"]
@@ -94,95 +94,28 @@ llm = ChatGoogleGenerativeAI(
     google_api_key=api_key
 )
 
-# Backup model
-backup_llm = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash-lite",
-    google_api_key=api_key
-)
-
-
-# ==========================================
-# PRODUCT FUNCTIONS
-# ==========================================
-
-def search_products(query: str):
-
-    words = query.lower().split()
-    matches = []
-
-    for product in PRODUCTS:
-
-        text = (
-            product["name"]
-            + " "
-            + product["category"]
-            + " "
-            + product["brand"]
-            + " "
-            + product["features"]
-        ).lower()
-
-        for word in words:
-
-            if len(word) > 2 and word in text:
-                matches.append(product)
-                break
-
-    return matches
-
-
-def filter_by_budget(category: str, max_price: float):
-
-    return [
-        product
-        for product in PRODUCTS
-        if product["category"].lower() == category.lower()
-        and product["price"] <= max_price
-    ]
-
-
-def compare_products(product_names: str):
-
-    names = [
-        name.strip().lower()
-        for name in product_names.split(",")
-    ]
-
-    return [
-        product
-        for product in PRODUCTS
-        if product["name"].lower() in names
-    ]
-
 
 # ==========================================
 # INPUT / OUTPUT
 # ==========================================
 
 class AgentInput(BaseModel):
-
-    input: str = Field(
-        description="Shopping request"
-    )
+    input: str = Field(description="Shopping request")
 
 
 class AgentOutput(BaseModel):
-
     output: str
 
 
 # ==========================================
-# GEMINI CALL WITH RETRY
+# GEMINI CALL
 # ==========================================
 
 def call_gemini(prompt):
 
-    # Try Gemini 3.6 Flash up to 3 times
-
     for attempt in range(3):
 
         try:
-
             response = llm.invoke(prompt)
 
             if response.content:
@@ -195,111 +128,63 @@ def call_gemini(prompt):
             if "503" not in error_text and "UNAVAILABLE" not in error_text:
                 break
 
-            wait_time = 5 * (2 ** attempt)
+            time.sleep(5 * (2 ** attempt))
 
-            time.sleep(wait_time)
-
-
-    # Try backup model
-
-    try:
-
-        response = backup_llm.invoke(prompt)
-
-        if response.content:
-            return response.content
-
-    except Exception as e:
-
-        error_text = str(e)
-
-        return (
-            "Gemini is temporarily unavailable. "
-            "Please try again after a few minutes.\n\n"
-            f"Error: {error_text}"
-        )
-
-    return "Gemini did not return a response. Please try again."
+    return "Gemini is temporarily unavailable. Please try again."
 
 
 # ==========================================
 # SHOPPING ASSISTANT
 # ==========================================
 
-def shopping_assistant(user_request: str):
+def shopping_assistant(user_request):
 
     request = user_request.lower()
 
-
-    # --------------------------------------
     # Detect category
-    # --------------------------------------
-
     if "laptop" in request:
-
         category = "laptop"
 
     elif "phone" in request or "smartphone" in request:
-
         category = "phone"
 
     elif "headphone" in request:
-
         category = "headphones"
 
     else:
-
         category = None
 
 
-    # --------------------------------------
     # Detect budget
-    # --------------------------------------
-
     budget_match = re.search(
         r'₹?\s*(\d{4,6})',
         request
     )
 
     if budget_match:
-
         budget = int(budget_match.group(1))
-
     else:
-
         budget = None
 
 
-    # --------------------------------------
-    # Select matching products
-    # --------------------------------------
-
+    # Select products
     selected = []
 
     for product in PRODUCTS:
 
-        if category:
+        if category and product["category"] != category:
+            continue
 
-            if product["category"] != category:
-                continue
-
-        if budget:
-
-            if product["price"] > budget:
-                continue
+        if budget and product["price"] > budget:
+            continue
 
         selected.append(product)
 
 
-    # If no exact match
+    # If nothing matches
     if not selected:
-
         selected = PRODUCTS
 
-
-    # --------------------------------------
-    # Convert products to JSON
-    # --------------------------------------
 
     product_text = json.dumps(
         selected,
@@ -307,12 +192,12 @@ def shopping_assistant(user_request: str):
     )
 
 
-    # --------------------------------------
-    # Gemini prompt
-    # --------------------------------------
+    # ==========================================
+    # SIMPLE OUTPUT PROMPT
+    # ==========================================
 
     prompt = f"""
-You are an AI Shopping Assistant.
+You are a simple AI Shopping Assistant.
 
 USER REQUEST:
 {user_request}
@@ -320,30 +205,61 @@ USER REQUEST:
 AVAILABLE PRODUCTS:
 {product_text}
 
-Help the user choose a suitable product.
+Give the answer in this simple format.
 
-Rules:
+For laptops use:
 
-1. Use only the products provided above.
+Laptop options under ₹60,000
+
+💻 Product Name — ₹Price
+Important features
+
+💻 Product Name — ₹Price
+Important features
+
+💻 Product Name — ₹Price
+Important features
+
+Best match: Product Name
+Budget option: Product Name
+
+For phones use:
+
+Phone options under the user's budget
+
+📱 Product Name — ₹Price
+Important features
+
+Best match: Product Name
+Budget option: Product Name
+
+For headphones use:
+
+Headphone options under the user's budget
+
+🎧 Product Name — ₹Price
+Important features
+
+Best match: Product Name
+Budget option: Product Name
+
+RULES:
+
+1. Use only the products provided.
 2. Do not invent products.
 3. Do not invent prices.
-4. Do not invent specifications.
-5. Mention product names and prices.
-6. Mention important matching features.
-7. Compare products when several match.
-8. Consider the user's budget and requirements.
-9. Give a clear and useful recommendation.
-10. Keep the answer simple and easy to understand.
+4. Do not show JSON.
+5. Do not show technical metadata.
+6. Do not give long explanations.
+7. Keep the answer short and simple.
+8. Mention important features matching the user's request.
+9. Use ₹ for prices.
+10. Give only the final shopping answer.
+11. Do not use Markdown tables.
+12. Do not add unnecessary headings.
 """
 
-
-    # --------------------------------------
-    # Call Gemini
-    # --------------------------------------
-
-    answer = call_gemini(prompt)
-
-    return answer
+    return call_gemini(prompt)
 
 
 # ==========================================
@@ -359,6 +275,14 @@ def run_agent(data):
     return {
         "output": answer
     }
+
+
+chain = RunnableLambda(
+    run_agent
+).with_types(
+    input_type=AgentInput,
+    output_type=AgentOutput
+)
 
 
 # ==========================================
@@ -386,14 +310,6 @@ def health():
 # ==========================================
 # LANGSERVE PLAYGROUND
 # ==========================================
-
-chain = RunnableLambda(
-    run_agent
-).with_types(
-    input_type=AgentInput,
-    output_type=AgentOutput
-)
-
 
 add_routes(
     app,
