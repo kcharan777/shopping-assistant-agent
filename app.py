@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
@@ -10,9 +11,9 @@ from langchain_core.runnables import RunnableLambda
 from langserve import add_routes
 
 
-# --------------------------------------------------
+# ==========================================
 # PRODUCT DATABASE
-# --------------------------------------------------
+# ==========================================
 
 PRODUCTS = [
     {
@@ -39,7 +40,6 @@ PRODUCTS = [
         "rating": 4.2,
         "features": "16GB RAM, 512GB SSD, 15.6 inch display"
     },
-
     {
         "name": "Samsung Galaxy A55",
         "category": "phone",
@@ -64,7 +64,6 @@ PRODUCTS = [
         "rating": 4.3,
         "features": "5G, AMOLED, good camera, long battery"
     },
-
     {
         "name": "Sony WH-1000XM5",
         "category": "headphones",
@@ -84,27 +83,35 @@ PRODUCTS = [
 ]
 
 
-# --------------------------------------------------
-# GEMINI MODEL
-# --------------------------------------------------
+# ==========================================
+# GEMINI MODELS
+# ==========================================
+
+api_key = os.environ["GEMINI_API_KEY"]
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.6-flash",
-    google_api_key=os.environ["GEMINI_API_KEY"],
-    temperature=0
+    google_api_key=api_key
+)
+
+# Backup model
+backup_llm = ChatGoogleGenerativeAI(
+    model="gemini-3.5-flash-lite",
+    google_api_key=api_key
 )
 
 
-# --------------------------------------------------
-# TOOLS / FUNCTIONS
-# --------------------------------------------------
+# ==========================================
+# PRODUCT FUNCTIONS
+# ==========================================
 
 def search_products(query: str):
-    words = query.lower().split()
 
+    words = query.lower().split()
     matches = []
 
     for product in PRODUCTS:
+
         text = (
             product["name"]
             + " "
@@ -116,6 +123,7 @@ def search_products(query: str):
         ).lower()
 
         for word in words:
+
             if len(word) > 2 and word in text:
                 matches.append(product)
                 break
@@ -124,6 +132,7 @@ def search_products(query: str):
 
 
 def filter_by_budget(category: str, max_price: float):
+
     return [
         product
         for product in PRODUCTS
@@ -133,6 +142,7 @@ def filter_by_budget(category: str, max_price: float):
 
 
 def compare_products(product_names: str):
+
     names = [
         name.strip().lower()
         for name in product_names.split(",")
@@ -145,83 +155,162 @@ def compare_products(product_names: str):
     ]
 
 
-# --------------------------------------------------
-# INPUT / OUTPUT MODELS
-# --------------------------------------------------
+# ==========================================
+# INPUT / OUTPUT
+# ==========================================
 
 class AgentInput(BaseModel):
+
     input: str = Field(
         description="Shopping request"
     )
 
 
 class AgentOutput(BaseModel):
+
     output: str
 
 
-# --------------------------------------------------
+# ==========================================
+# GEMINI CALL WITH RETRY
+# ==========================================
+
+def call_gemini(prompt):
+
+    # Try Gemini 3.6 Flash up to 3 times
+
+    for attempt in range(3):
+
+        try:
+
+            response = llm.invoke(prompt)
+
+            if response.content:
+                return response.content
+
+        except Exception as e:
+
+            error_text = str(e)
+
+            if "503" not in error_text and "UNAVAILABLE" not in error_text:
+                break
+
+            wait_time = 5 * (2 ** attempt)
+
+            time.sleep(wait_time)
+
+
+    # Try backup model
+
+    try:
+
+        response = backup_llm.invoke(prompt)
+
+        if response.content:
+            return response.content
+
+    except Exception as e:
+
+        error_text = str(e)
+
+        return (
+            "Gemini is temporarily unavailable. "
+            "Please try again after a few minutes.\n\n"
+            f"Error: {error_text}"
+        )
+
+    return "Gemini did not return a response. Please try again."
+
+
+# ==========================================
 # SHOPPING ASSISTANT
-# --------------------------------------------------
+# ==========================================
 
 def shopping_assistant(user_request: str):
 
     request = user_request.lower()
 
-    # Find category
+
+    # --------------------------------------
+    # Detect category
+    # --------------------------------------
+
     if "laptop" in request:
+
         category = "laptop"
 
     elif "phone" in request or "smartphone" in request:
+
         category = "phone"
 
     elif "headphone" in request:
+
         category = "headphones"
 
     else:
+
         category = None
 
 
-    # Find budget
+    # --------------------------------------
+    # Detect budget
+    # --------------------------------------
+
     budget_match = re.search(
         r'₹?\s*(\d{4,6})',
         request
     )
 
     if budget_match:
+
         budget = int(budget_match.group(1))
+
     else:
+
         budget = None
 
 
+    # --------------------------------------
     # Select matching products
+    # --------------------------------------
+
     selected = []
 
     for product in PRODUCTS:
 
         if category:
+
             if product["category"] != category:
                 continue
 
         if budget:
+
             if product["price"] > budget:
                 continue
 
         selected.append(product)
 
 
-    # If nothing matches, use all products
+    # If no exact match
     if not selected:
+
         selected = PRODUCTS
 
 
-    # Convert products to text for Gemini
+    # --------------------------------------
+    # Convert products to JSON
+    # --------------------------------------
+
     product_text = json.dumps(
         selected,
         indent=2
     )
 
 
+    # --------------------------------------
     # Gemini prompt
+    # --------------------------------------
+
     prompt = f"""
 You are an AI Shopping Assistant.
 
@@ -231,49 +320,50 @@ USER REQUEST:
 AVAILABLE PRODUCTS:
 {product_text}
 
-Your job is to help the user choose a suitable product.
+Help the user choose a suitable product.
 
-RULES:
-1. Use ONLY the products and information provided.
+Rules:
+
+1. Use only the products provided above.
 2. Do not invent products.
 3. Do not invent prices.
 4. Do not invent specifications.
-5. Mention the product name and price.
-6. Mention the important matching features.
-7. If multiple products match, compare them briefly.
-8. Give a clear recommendation based on the user's requirements.
-9. Keep the answer simple and easy to understand.
-10. Do not say that the output is predefined.
+5. Mention product names and prices.
+6. Mention important matching features.
+7. Compare products when several match.
+8. Consider the user's budget and requirements.
+9. Give a clear and useful recommendation.
+10. Keep the answer simple and easy to understand.
 """
 
 
-    # Ask Gemini to generate final answer
-    response = llm.invoke(prompt)
+    # --------------------------------------
+    # Call Gemini
+    # --------------------------------------
 
-    return response.content
+    answer = call_gemini(prompt)
+
+    return answer
 
 
-# --------------------------------------------------
-# LANGSERVE FUNCTION
-# --------------------------------------------------
+# ==========================================
+# LANGSERVE
+# ==========================================
 
 def run_agent(data):
 
-    # Get user's input from LangServe
     user_input = data["input"]
 
-    # Generate answer
     answer = shopping_assistant(user_input)
 
-    # Return output
     return {
         "output": answer
     }
 
 
-# --------------------------------------------------
-# FASTAPI APPLICATION
-# --------------------------------------------------
+# ==========================================
+# FASTAPI
+# ==========================================
 
 app = FastAPI(
     title="Shopping Assistant Agent",
@@ -281,9 +371,9 @@ app = FastAPI(
 )
 
 
-# --------------------------------------------------
+# ==========================================
 # HEALTH CHECK
-# --------------------------------------------------
+# ==========================================
 
 @app.get("/health")
 def health():
@@ -293,14 +383,17 @@ def health():
     }
 
 
-# --------------------------------------------------
-# LANGSERVE ROUTE
-# --------------------------------------------------
+# ==========================================
+# LANGSERVE PLAYGROUND
+# ==========================================
 
-chain = RunnableLambda(run_agent).with_types(
+chain = RunnableLambda(
+    run_agent
+).with_types(
     input_type=AgentInput,
     output_type=AgentOutput
 )
+
 
 add_routes(
     app,
@@ -309,9 +402,9 @@ add_routes(
 )
 
 
-# --------------------------------------------------
-# RUN SERVER
-# --------------------------------------------------
+# ==========================================
+# START SERVER
+# ==========================================
 
 if __name__ == "__main__":
 
