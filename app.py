@@ -90,7 +90,7 @@ PRODUCTS = [
 api_key = os.environ["GEMINI_API_KEY"]
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
+    model="gemini-3.6-flash-lite",
     google_api_key=api_key
 )
 
