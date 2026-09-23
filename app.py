@@ -12,10 +12,6 @@ from langchain_core.runnables import RunnableLambda
 from langserve import add_routes
 
 
-# ==========================================
-# PRODUCT DATABASE
-# ==========================================
-
 PRODUCTS = [
     {
         "name": "Acer Aspire 5",
@@ -84,10 +80,6 @@ PRODUCTS = [
 ]
 
 
-# ==========================================
-# GEMINI
-# ==========================================
-
 api_key = os.environ["GEMINI_API_KEY"]
 
 llm = ChatGoogleGenerativeAI(
@@ -95,10 +87,6 @@ llm = ChatGoogleGenerativeAI(
     google_api_key=api_key
 )
 
-
-# ==========================================
-# INPUT / OUTPUT
-# ==========================================
 
 class AgentInput(BaseModel):
     input: str = Field(description="Shopping request")
@@ -108,23 +96,15 @@ class AgentOutput(BaseModel):
     output: str
 
 
-# ==========================================
-# GEMINI CALL
-# ==========================================
-
 def call_gemini(prompt):
-
     for attempt in range(3):
-
         try:
-
             response = llm.invoke(prompt)
 
             if response.content:
                 return response.content
 
         except Exception as e:
-
             error_text = str(e)
 
             if "503" not in error_text and "UNAVAILABLE" not in error_text:
@@ -135,49 +115,23 @@ def call_gemini(prompt):
     return "Gemini is temporarily unavailable. Please try again."
 
 
-# ==========================================
-# SHOPPING ASSISTANT
-# ==========================================
-
 def shopping_assistant(user_request):
 
     request = user_request.lower()
 
-
-    # Detect category
     if "laptop" in request:
-
         category = "laptop"
-
     elif "phone" in request or "smartphone" in request:
-
         category = "phone"
-
     elif "headphone" in request:
-
         category = "headphones"
-
     else:
-
         category = None
 
+    budget_match = re.search(r'₹?\s*(\d{4,6})', request)
 
-    # Detect budget
-    budget_match = re.search(
-        r'₹?\s*(\d{4,6})',
-        request
-    )
+    budget = int(budget_match.group(1)) if budget_match else None
 
-    if budget_match:
-
-        budget = int(budget_match.group(1))
-
-    else:
-
-        budget = None
-
-
-    # Select products
     selected = []
 
     for product in PRODUCTS:
@@ -190,22 +144,10 @@ def shopping_assistant(user_request):
 
         selected.append(product)
 
-
-    # If nothing matches
     if not selected:
-
         selected = PRODUCTS
 
-
-    product_text = json.dumps(
-        selected,
-        indent=2
-    )
-
-
-    # ==========================================
-    # SIMPLE OUTPUT PROMPT
-    # ==========================================
+    product_text = json.dumps(selected, indent=2)
 
     prompt = f"""
 You are a simple AI Shopping Assistant.
@@ -216,9 +158,11 @@ USER REQUEST:
 AVAILABLE PRODUCTS:
 {product_text}
 
-Give the answer in this exact simple format:
+Give the answer in this simple format.
 
-Laptop options under ₹60,000
+For laptops:
+
+Laptop options under the user's budget
 
 💻 Product Name — ₹Price
 Important features
@@ -232,8 +176,27 @@ Important features
 Best match: Product Name
 Budget option: Product Name
 
-RULES:
+For phones:
 
+Phone options under the user's budget
+
+📱 Product Name — ₹Price
+Important features
+
+Best match: Product Name
+Budget option: Product Name
+
+For headphones:
+
+Headphone options under the user's budget
+
+🎧 Product Name — ₹Price
+Important features
+
+Best match: Product Name
+Budget option: Product Name
+
+RULES:
 1. Use only the products provided.
 2. Do not invent products.
 3. Do not invent prices.
@@ -244,17 +207,13 @@ RULES:
 8. Mention important features matching the user's request.
 9. Use ₹ for prices.
 10. Give only the final shopping answer.
-11. Do not use tables.
+11. Do not use Markdown tables.
 12. Do not add unnecessary headings.
 13. Format prices with commas, for example ₹54,990.
 """
 
     return call_gemini(prompt)
 
-
-# ==========================================
-# LANGSERVE
-# ==========================================
 
 def run_agent(data):
 
@@ -267,17 +226,11 @@ def run_agent(data):
     }
 
 
-chain = RunnableLambda(
-    run_agent
-).with_types(
+chain = RunnableLambda(run_agent).with_types(
     input_type=AgentInput,
     output_type=AgentOutput
 )
 
-
-# ==========================================
-# FASTAPI
-# ==========================================
 
 app = FastAPI(
     title="Shopping Assistant Agent",
@@ -285,21 +238,19 @@ app = FastAPI(
 )
 
 
-# ==========================================
-# CLEAN HOME PAGE
-# ==========================================
-
 @app.get("/")
 def home():
 
-    return FileResponse(
-        "static/index.html"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    file_path = os.path.join(
+        base_dir,
+        "static",
+        "index.html"
     )
 
+    return FileResponse(file_path)
 
-# ==========================================
-# HEALTH CHECK
-# ==========================================
 
 @app.get("/health")
 def health():
@@ -309,10 +260,6 @@ def health():
     }
 
 
-# ==========================================
-# LANGSERVE PLAYGROUND
-# ==========================================
-
 add_routes(
     app,
     chain,
@@ -320,17 +267,11 @@ add_routes(
 )
 
 
-# ==========================================
-# START SERVER
-# ==========================================
-
 if __name__ == "__main__":
 
     import uvicorn
 
-    port = int(
-        os.environ.get("PORT", 8000)
-    )
+    port = int(os.environ.get("PORT", 8000))
 
     uvicorn.run(
         app,
