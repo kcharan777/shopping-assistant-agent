@@ -41,7 +41,7 @@ def compare_products(product_names: str) -> str:
     return json.dumps(matches) if matches else 'No matching products found.'
 
 tools=[search_products,filter_by_budget,compare_products]
-llm=ChatGoogleGenerativeAI(model='gemini-2.5-flash',api_key=os.environ['GEMINI_API_KEY'],temperature=0)
+llm=ChatGoogleGenerativeAI(model='gemini-3.6-flash',api_key=os.environ['GEMINI_API_KEY'],temperature=0)
 agent=create_agent(model=llm,tools=tools,system_prompt='You are an AI Shopping Assistant. Use tools for product data. Never invent prices, ratings or specifications. Respect the user budget and explain recommendations clearly.')
 
 class AgentInput(BaseModel):
